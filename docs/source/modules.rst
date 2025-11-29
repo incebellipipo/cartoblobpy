@@ -1,7 +1,7 @@
-template_package
+cartoblobpy
 ================
 
 .. toctree::
    :maxdepth: 4
 
-   template_package
+   cartoblobpy

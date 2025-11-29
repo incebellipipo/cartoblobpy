@@ -1,6 +1,0 @@
-sphinx
-sphinx_rtd_theme
-readthedocs-sphinx-search
-docutils
-sphinx-hoverxref
-myst-parser==0.18.1

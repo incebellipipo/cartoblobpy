@@ -1,0 +1,13 @@
+shoeboxpy
+numpy
+scipy
+matplotlib
+pandas
+casadi
+ipython
+ipywidgets
+ipympl
+gymnasium
+shapepy
+networkx
+pyyaml

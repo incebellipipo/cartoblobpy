@@ -17,8 +17,8 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'template_python_package'
-copyright = '2023, NTNU'
+project = 'cartoblobpy'
+copyright = '2025, NTNU'
 author = 'Emir Cem Gezer'
 
 # The full version, including alpha/beta/rc tags
