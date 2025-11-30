@@ -54,29 +54,67 @@ class Graph:
         # Origin of the grid in world coordinates, (x, y, yaw)
         self.__origin = np.zeros(3)
 
-    def inflate_obstacles(self, radius=1):
+        # Coordinate frame for interpreting world coordinates:
+        # "ENU": world = [x_east, y_north]
+        # "NED": world = [x_north, y_east]
+        self.__frame = "ENU"
+
+
+    def inflate_obstacles(self, radius, use_world_units=True):
         """
         Inflate obstacles in the grid to account for agent size.
 
-        :param radius: The inflation radius in pixels. Zero disables inflation.
-        :returns: The grid with inflated obstacles if radius=0, otherwise None.
+        This uses a distance transform and creates a "soft" inflation
+        where cost decays with distance to obstacles.
+
+        Parameters
+        ----------
+        radius : float
+            If use_world_units=True: radius in meters.
+            If use_world_units=False: radius in pixels.
+        use_world_units : bool, optional
+            If True, interpret radius as meters; otherwise as pixels.
+
+        Returns
+        -------
+        np.ndarray
+            The inflated occupancy grid (values in [0, 1]).
         """
-        if radius == 0:
+        if self.__grid is None:
+            raise RuntimeError("Grid not initialized; load an image or YAML first.")
+
+        if radius <= 0:
+            # No inflation, just return the current grid
             return self.__grid
 
-        # Convert to binary mask: Obstacles = 1, Free space = 0
-        obstacle_mask = ( self.__grid > 0.5).astype(np.uint8)
+        # Binary obstacle mask: 1 = obstacle, 0 = free
+        obstacle_mask = (self.__grid > self.__treshold).astype(np.uint8)
 
-        # Compute distance transform (distance to nearest obstacle)
-        distance_map = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
+        # Distance transform from free space to nearest obstacle (in pixels)
+        distance_pixels = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
 
-        # Apply a gradient effect using an exponential or linear decay
-        inflated_map = np.exp(-distance_map / radius)
+        if use_world_units:
+            # Convert distance and radius to meters
+            distance = distance_pixels * self.__resolution
+            radius_scale = radius  # meters
+        else:
+            distance = distance_pixels
+            radius_scale = float(radius)  # pixels
 
-        # apply obstacle mask to inflated map to make sure obstacles are not inflated
-        inflated_map = np.where(obstacle_mask, 1, inflated_map)
+        # Soft inflation: cost decays with distance.
+        # For example: cost = exp(-d / R), with cost=1 at obstacle.
+        # You can tune this if you want a different profile.
+        with np.errstate(over="ignore"):
+            inflated = np.exp(-distance / radius_scale)
 
-        self.__grid = inflated_map
+        # Make sure actual obstacles stay at 1
+        inflated = np.where(obstacle_mask, 1.0, inflated)
+
+        # Clamp to [0, 1]
+        inflated = np.clip(inflated, 0.0, 1.0)
+
+        self.__grid = inflated
+        return self.__grid
 
     def load_from_yaml(self, yaml_file):
         """
@@ -316,52 +354,132 @@ class Graph:
         """
         return self.__treshold
 
+    @property
+    def coordinate_frame(self):
+        """
+        Get the coordinate frame.
+
+        :returns: "ENU" or "NED".
+        """
+        return self.__frame
+
+    @coordinate_frame.setter
+    def coordinate_frame(self, frame):
+        """
+        Set the coordinate frame.
+
+        :param frame: "ENU" or "NED".
+        """
+        frame = frame.upper()
+        if frame not in ("ENU", "NED"):
+            raise ValueError("coordinate_frame must be 'ENU' or 'NED'")
+        self.__frame = frame
 
     def world_to_grid(self, world_coords):
         """
-        Transform world coordinates to grid coordinates
+        Transform world coordinates to grid coordinates.
 
-        :param world_coords: World coordinates as a numpy array [x, y].
-        :returns: Grid coordinates as a numpy array [row, column].
+        In ENU frame:
+            world_coords = [x_east, y_north]
+        In NED frame:
+            world_coords = [x_north, y_east]
+
+        Internally, the map plane is treated as [x_east, y_north],
+        and grid indices are:
+            row ~ y_north / resolution
+            col ~ x_east / resolution
+
+        Parameters
+        ----------
+        world_coords : array_like
+            World coordinates [x, y] in the selected coordinate_frame.
+
+        Returns
+        -------
+        np.ndarray
+            Grid coordinates [row, column].
         """
-        # Extract origin components
+        world_coords = np.asarray(world_coords, dtype=float)
+        if world_coords.shape[0] != 2:
+            raise ValueError("world_coords must be a 2-element array-like [x, y].")
+
         ox, oy, oyaw = self.__origin
 
-        # Translate
-        translated = np.array([world_coords[0] - ox, world_coords[1] - oy])
+        # Convert world (frame) -> internal EN ([x_east, y_north])
+        if self.__frame == "ENU":
+            wx, wy = world_coords[0], world_coords[1]
+            ox_en, oy_en = ox, oy
+        else:  # NED: world = [x_north, y_east]
+            wx, wy = world_coords[1], world_coords[0]  # [x_east, y_north]
+            ox_en, oy_en = oy, ox
 
-        # Rotate (counter-clockwise rotation matrix)
+        translated = np.array([wx - ox_en, wy - oy_en])
+
+        # Rotate into map frame (counter-clockwise rotation)
         c, s = np.cos(-oyaw), np.sin(-oyaw)
         rotation_matrix = np.array([[c, -s], [s, c]])
         rotated = rotation_matrix @ translated
 
-        # Scale to grid coordinates
-        grid_coords = rotated / self.__resolution
+        # Map plane coordinates in meters
+        x_east_m, y_north_m = rotated[0], rotated[1]
+
+        # Convert to grid indices (row, col)
+        row = y_north_m / self.__resolution
+        col = x_east_m / self.__resolution
+
+        return np.array([row, col])
 
         return grid_coords
 
     def grid_to_world(self, grid_coords):
         """
-        Transform grid coordinates to world coordinates
+        Transform grid coordinates to world coordinates.
 
-        :param grid_coords: Grid coordinates as a numpy array [row, column].
-        :returns: World coordinates as a numpy array [x, y].
+        In ENU frame:
+            returned [x_east, y_north]
+        In NED frame:
+            returned [x_north, y_east]
+
+        Parameters
+        ----------
+        grid_coords : array_like
+            Grid coordinates [row, column].
+
+        Returns
+        -------
+        np.ndarray
+            World coordinates [x, y] in the selected coordinate_frame.
         """
-        # Extract origin components
+        grid_coords = np.asarray(grid_coords, dtype=float)
+        if grid_coords.shape[0] != 2:
+            raise ValueError("grid_coords must be a 2-element array-like [row, col].")
+
+        row, col = grid_coords[0], grid_coords[1]
         ox, oy, oyaw = self.__origin
 
-        # Scale to meters
-        scaled = np.array(grid_coords) * self.__resolution
+        # Grid indices -> internal EN coordinates in meters
+        x_east_m = col * self.__resolution
+        y_north_m = row * self.__resolution
 
-        # Rotate (clockwise rotation matrix - inverse of counter-clockwise)
+        # Rotate back to world EN frame
         c, s = np.cos(oyaw), np.sin(oyaw)
         rotation_matrix = np.array([[c, -s], [s, c]])
-        rotated = rotation_matrix @ scaled
+        rotated = rotation_matrix @ np.array([x_east_m, y_north_m])
 
-        # Translate
-        world_coords = np.array([rotated[0] + ox, rotated[1] + oy])
+        # Add origin in EN
+        if self.__frame == "ENU":
+            wx_en = rotated[0] + ox
+            wy_en = rotated[1] + oy
+            # ENU world is just EN
+            world_x, world_y = wx_en, wy_en
+        else:
+            wx_en = rotated[0] + oy  # note swap
+            wy_en = rotated[1] + ox
+            # NED world = [x_north, y_east] = [y_north_en, x_east_en]
+            world_x = wy_en  # north
+            world_y = wx_en  # east
 
-        return world_coords
+        return np.array([world_x, world_y])
 
     def is_free_path(self, point1, point2):
         """
@@ -404,3 +522,81 @@ class Graph:
         distance_meters = distance_pixels * self.__resolution
 
         return distance_meters
+
+    def plot(self, ax=None, show_start_goal=True, show_colorbar=True, **imshow_kwargs):
+        """
+        Plot the occupancy grid in real-world coordinates.
+
+        The horizontal axis is East [m], the vertical axis is North [m].
+        This convention is fixed; the coordinate_frame only changes how
+        world coordinates map into this plot.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. If None, a new figure and axes are created.
+        show_start_goal : bool, optional
+            If True, plot start and goal points if available.
+        show_colorbar : bool, optional
+            If True, add a colorbar for the occupancy values.
+        **imshow_kwargs :
+            Extra keyword arguments passed to plt.imshow (e.g., cmap="gray").
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes with the plot.
+        """
+        if self.__grid is None:
+            raise RuntimeError("Grid not initialized; load an image or YAML first.")
+
+        if ax is None:
+            fig, ax = plt.subplots()
+
+        height, width = self.__grid.shape
+
+        # Real-world extents in meters (map plane)
+        extent = [0.0, self.real_width, 0.0, self.real_height]
+
+        imshow_defaults = dict(origin="lower", extent=extent)
+        imshow_defaults.update(imshow_kwargs)
+
+        im = ax.imshow(self.__grid, **imshow_defaults)
+
+        # Start and goal markers (converted to world EN plane)
+        if show_start_goal:
+            if self.__start is not None:
+                r, c = self.__start
+                # grid_to_world expects [row, col]
+                w_start = self.grid_to_world(np.array([r, c]))
+                # Convert world to internal EN for plotting
+                if self.__frame == "ENU":
+                    x_plot, y_plot = w_start[0], w_start[1]
+                else:  # NED
+                    # world = [x_north, y_east] -> EN = [x_east, y_north]
+                    x_plot, y_plot = w_start[1], w_start[0]
+                ax.plot(x_plot, y_plot, "go", label="start")
+
+            if self.__goal is not None:
+                r, c = self.__goal
+                w_goal = self.grid_to_world(np.array([r, c]))
+                if self.__frame == "ENU":
+                    x_plot, y_plot = w_goal[0], w_goal[1]
+                else:
+                    x_plot, y_plot = w_goal[1], w_goal[0]
+                ax.plot(x_plot, y_plot, "ro", label="goal")
+
+        if self.__frame == "NED":
+            ax.set_xlabel(r"$y$, East [m]")
+            ax.set_ylabel(r"$x$, North [m]")
+        else:
+            ax.set_xlabel(r"$x$, East [m]")
+            ax.set_ylabel(r"$y$, North [m]")
+
+        if show_start_goal and (self.__start is not None or self.__goal is not None):
+            ax.legend()
+
+        if show_colorbar:
+            plt.colorbar(im, ax=ax, label="Occupancy / cost")
+
+        return ax
