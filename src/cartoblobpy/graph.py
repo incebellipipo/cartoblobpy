@@ -376,7 +376,7 @@ class Graph:
         pg2 = self.world_to_grid(point2).astype(int)
 
         # Get all points in the line using Bresenham's algorithm, so implement it here
-        from cartoblobpy.utils import bresenham
+        from .utils import bresenham
 
         line_points = bresenham(pg1[0], pg1[1], pg2[0], pg2[1])
         for r, c in line_points:
@@ -384,3 +384,23 @@ class Graph:
                 return False
 
         return True
+
+    def distance_to_closest_obstacle(self, world_point):
+        """
+        Calculate the distance from a world point to the closest obstacle.
+
+        :param world_point: World coordinates of the point as a numpy array [x, y].
+        :returns: Distance to the closest obstacle in meters.
+        """
+        # Convert world to grid
+        pg = self.world_to_grid(world_point).astype(int)
+
+        # Compute distance transform (distance to nearest obstacle)
+        obstacle_mask = ( self.__grid > self.__treshold).astype(np.uint8)
+        distance_map = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
+
+        # Get distance in pixels and convert to meters
+        distance_pixels = distance_map[pg[0], pg[1]]
+        distance_meters = distance_pixels * self.__resolution
+
+        return distance_meters
