@@ -2,13 +2,18 @@
 
 def bresenham(x0, y0, x1, y1):
     """Bresenham's Line Algorithm
-    Produces a list of tuples from start and end
+    Produces a list of tuples from start and end.
 
-    :param x0: Starting x coordinate
-    :param y0: Starting y coordinate
-    :param x1: Ending x coordinate
-    :param y1: Ending y coordinate
-    :returns: List of tuples in the line from (x0, y0) to (x1, y1)
+    :param x0: Starting x coordinate.
+    :type x0: int
+    :param y0: Starting y coordinate.
+    :type y0: int
+    :param x1: Ending x coordinate.
+    :type x1: int
+    :param y1: Ending y coordinate.
+    :type y1: int
+    :returns: List of points in the line from ``(x0, y0)`` to ``(x1, y1)``.
+    :rtype: list[tuple[int, int]]
     """
     points = []
     dx = abs(x1 - x0)

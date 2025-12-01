@@ -7,7 +7,7 @@ name = "cartoblobpy"
 authors = [
   { name="Emir Cem Gezer", email="me@emircem.com"}
 ]
-description = "A nonlinear model predictive control framework for safe velocity controller"
+description = "A simple map representation and path planning library for 2D occupancy grids."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENCE" }

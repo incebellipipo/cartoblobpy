@@ -15,12 +15,6 @@ import yaml
 import os
 
 
-VERMILLION = (213, 94, 0, 255)
-BLUE_GREEN = (0, 158, 115, 255)
-SKY_BLUE = (86, 180, 233, 255)
-REDDISH_PURPLE = (204, 121, 167, 255)
-
-
 class Graph:
     """
     A graph representation for path planning.
@@ -43,11 +37,11 @@ class Graph:
 
         self.__start = None
         self.__goal = None
+
         self.__grid = None
         self.__nodes = nx.Graph()
 
-        self.__infilation = 2 # pixels
-        self.__treshold = 0.6 # treshold for obstacles
+        self.__treshold = 0.6  # treshold for obstacles
 
         # Resolution of the grid in world coordinates (meters per pixel)
         self.__resolution = 1.0
@@ -59,7 +53,6 @@ class Graph:
         # "NED": world = [x_north, y_east]
         self.__frame = "ENU"
 
-
     def inflate_obstacles(self, radius, use_world_units=True):
         """
         Inflate obstacles in the grid to account for agent size.
@@ -67,21 +60,17 @@ class Graph:
         This uses a distance transform and creates a "soft" inflation
         where cost decays with distance to obstacles.
 
-        Parameters
-        ----------
-        radius : float
-            If use_world_units=True: radius in meters.
-            If use_world_units=False: radius in pixels.
-        use_world_units : bool, optional
-            If True, interpret radius as meters; otherwise as pixels.
-
-        Returns
-        -------
-        np.ndarray
-            The inflated occupancy grid (values in [0, 1]).
+        :param radius: If ``use_world_units`` is ``True``: radius in meters; otherwise in pixels.
+        :type radius: float
+        :param use_world_units: Interpret ``radius`` as meters when ``True``; pixels when ``False``.
+        :type use_world_units: bool
+        :returns: The inflated occupancy grid with values in ``[0, 1]``.
+        :rtype: numpy.ndarray
+        :raises RuntimeError: If the grid is not initialized yet.
         """
         if self.__grid is None:
-            raise RuntimeError("Grid not initialized; load an image or YAML first.")
+            raise RuntimeError(
+                "Grid not initialized; load an image or YAML first.")
 
         if radius <= 0:
             # No inflation, just return the current grid
@@ -91,7 +80,8 @@ class Graph:
         obstacle_mask = (self.__grid > self.__treshold).astype(np.uint8)
 
         # Distance transform from free space to nearest obstacle (in pixels)
-        distance_pixels = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
+        distance_pixels = scipy.ndimage.distance_transform_edt(
+            1 - obstacle_mask)
 
         if use_world_units:
             # Convert distance and radius to meters
@@ -119,16 +109,21 @@ class Graph:
     def load_from_yaml(self, yaml_file):
         """
         Load a graph representation from a YAML file.
-        The YAML file should contain:
-        - image: Path to the image file.
-        - resolution: Resolution of the grid in meters per pixel.
-        - origin: Origin of the grid in world coordinates (x, y, yaw).
 
-        The YAML file can also contain:
-        - start: (row, column) coordinates for the start point.
-        - goal: (row, column) coordinates for the goal point.
+        The YAML file should contain:
+
+        - ``image``: Path to the image file (absolute or relative to the YAML file).
+        - ``resolution``: Resolution of the grid in meters per pixel.
+        - ``origin``: Origin of the grid in world coordinates ``[x, y, yaw]``.
+
+        Optional keys:
+
+        - ``start``: Grid coordinates ``(row, column)`` for the start point.
+        - ``goal``: Grid coordinates ``(row, column)`` for the goal point.
 
         :param yaml_file: Path to the YAML file to load.
+        :type yaml_file: str
+        :raises ValueError: If required keys are missing or invalid.
         """
         with open(yaml_file, 'r') as file:
             config = yaml.safe_load(file)
@@ -161,16 +156,19 @@ class Graph:
         """
         Load a graph representation from an image file.
 
-        The image should use specific colors to represent:
+        Color coding in the image:
+
         - Green pixels: start location
         - Red pixels: goal location
         - Black pixels: obstacles
         - Transparent/white pixels: free space
 
         :param image_file: Path to the image file to load.
+        :type image_file: str
         """
         # Load png and convert transparent pixels to white
-        img = Image.open(image_file).convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
+        img = Image.open(image_file).convert(
+            "RGBA").transpose(Image.FLIP_TOP_BOTTOM)
 
         # Convert to NumPy array
         grid = np.array(img)
@@ -188,23 +186,27 @@ class Graph:
         # Compute center of mass for start point if exists
         start_points = np.where(start_mask)
         if len(start_points[0]) > 0:
-            start_r = int(np.mean(start_points[0]))
-            start_c = int(np.mean(start_points[1]))
-            self.__start = (start_r, start_c)
+            start_r = np.mean(start_points[0])
+            start_c = np.mean(start_points[1])
+            self.__start = self.grid_to_world((start_r, start_c))
 
         # Compute center of mass for goal point if exists
         goal_points = np.where(goal_mask)
         if len(goal_points[0]) > 0:
-            goal_r = int(np.mean(goal_points[0]))
-            goal_c = int(np.mean(goal_points[1]))
-            self.__goal = (goal_r, goal_c)
+            goal_r = np.mean(goal_points[0])
+            goal_c = np.mean(goal_points[1])
+            self.__goal = self.grid_to_world((goal_r, goal_c))
 
     def build_graph(self):
         """
-        Build a networkx graph from the grid representation.
+        Build a NetworkX graph from the grid representation.
 
-        Creates nodes for all non-obstacle cells and adds edges between adjacent cells.
-        Edge weights are calculated based on distance and proximity to obstacles.
+        Creates nodes for all non-obstacle cells and adds edges between
+        adjacent cells. Edge weights are the Euclidean step distance scaled by
+        local occupancy cost.
+
+        :returns: A populated graph of free cells with weighted edges.
+        :rtype: networkx.Graph
         """
 
         self.__nodes.clear()
@@ -223,10 +225,9 @@ class Graph:
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < rows and 0 <= nc < cols:
                     self.__nodes.add_edge(
-                        (r, c), (nr, nc), weight=(np.sqrt(dr**2 + dc**2) * (1 + self.__grid[nr, nc]))
+                        (r, c), (nr, nc), weight=(
+                            np.sqrt(dr**2 + dc**2) * (1 + self.__grid[nr, nc]))
                     )
-
-
 
     @property
     def nodes(self):
@@ -234,6 +235,7 @@ class Graph:
         Get the graph nodes.
 
         :returns: The graph representation of the environment.
+        :rtype: networkx.Graph
         """
         return self.__nodes
 
@@ -242,7 +244,8 @@ class Graph:
         """
         Get the start point coordinates.
 
-        :returns: (row, column) coordinates of the start point, or None if not set.
+        :returns: Grid coordinates ``(row, column)`` of the start point, or ``None`` if not set.
+        :rtype: tuple[int, int] | None
         """
         return self.__start
 
@@ -251,16 +254,18 @@ class Graph:
         """
         Get the grid representation of the environment.
 
-        :returns: 2D array where values represent obstacle probability (0=free, 1=obstacle).
+        :returns: 2D array where values represent obstacle probability (``0``=free, ``1``=obstacle).
+        :rtype: numpy.ndarray
         """
         return self.__grid
 
     @property
     def goal(self):
         """
-        Get the goal point coordinates.
+        Get the goal point coordinates in world coordinates.
 
-        :returns: (row, column) coordinates of the goal point, or None if not set.
+        :returns: World coordinates ``[x, y]`` of the goal point in the selected frame, or ``None`` if not set.
+        :rtype: numpy.ndarray | None
         """
         return self.__goal
 
@@ -269,7 +274,8 @@ class Graph:
         """
         Set the goal point coordinates.
 
-        :param goal: (row, column) coordinates for the goal point.
+        :param goal: World coordinates ``(x, y)`` for the goal point.
+        :type goal: array_like
         """
         self.__goal = goal
 
@@ -278,7 +284,8 @@ class Graph:
         """
         Set the start point coordinates.
 
-        :param start: (row, column) coordinates for the start point.
+        :param start: Grid coordinates ``(row, column)`` for the start point.
+        :type start: tuple[int, int]
         """
         self.__start = start
 
@@ -288,6 +295,7 @@ class Graph:
         Get the resolution of the grid in world coordinates (meters per pixel).
 
         :returns: Resolution in meters per pixel.
+        :rtype: float
         """
         return self.__resolution
 
@@ -297,6 +305,7 @@ class Graph:
         Set the resolution of the grid in world coordinates (meters per pixel).
 
         :param resolution: Resolution in meters per pixel.
+        :type resolution: float
         """
         self.__resolution = resolution
 
@@ -305,7 +314,8 @@ class Graph:
         """
         Get the origin of the grid in world coordinates (x, y, yaw).
 
-        :returns: Origin as a numpy array [x, y, yaw].
+        :returns: Origin as a numpy array ``[x, y, yaw]``.
+        :rtype: numpy.ndarray
         """
         return self.__origin
 
@@ -314,36 +324,40 @@ class Graph:
         """
         Set the origin of the grid in world coordinates (x, y, yaw).
 
-        :param origin: Origin as a numpy array [x, y, yaw].
+        :param origin: Origin as a numpy array ``[x, y, yaw]``.
+        :type origin: array_like
         """
         self.__origin = np.array(origin)
 
     @property
-    def real_width(self):
+    def width(self):
         """
         Get the real width of the grid in world coordinates.
 
         :returns: Width in meters.
+        :rtype: float
         """
         return self.__grid.shape[1] * self.__resolution
 
     @property
-    def real_height(self):
+    def height(self):
         """
         Get the real height of the grid in world coordinates.
 
         :returns: Height in meters.
+        :rtype: float
         """
         return self.__grid.shape[0] * self.__resolution
 
     @property
-    def real_size(self):
+    def shape(self):
         """
         Get the real size of the grid in world coordinates.
 
-        :returns: Size as a tuple (width, height) in meters.
+        :returns: Size as a tuple ``(width, height)`` in meters.
+        :rtype: tuple[float, float]
         """
-        return (self.real_width, self.real_height)
+        return (self.width, self.height)
 
     @property
     def occupancy_threshold(self):
@@ -351,6 +365,7 @@ class Graph:
         Get the occupancy threshold for obstacle detection.
 
         :returns: Occupancy threshold value.
+        :rtype: float
         """
         return self.__treshold
 
@@ -360,6 +375,7 @@ class Graph:
         Get the coordinate frame.
 
         :returns: "ENU" or "NED".
+        :rtype: str
         """
         return self.__frame
 
@@ -369,6 +385,8 @@ class Graph:
         Set the coordinate frame.
 
         :param frame: "ENU" or "NED".
+        :type frame: str
+        :raises ValueError: If the frame is not one of "ENU" or "NED".
         """
         frame = frame.upper()
         if frame not in ("ENU", "NED"):
@@ -379,29 +397,22 @@ class Graph:
         """
         Transform world coordinates to grid coordinates.
 
-        In ENU frame:
-            world_coords = [x_east, y_north]
-        In NED frame:
-            world_coords = [x_north, y_east]
+        In ENU frame: ``world_coords = [x_east, y_north]``.
+        In NED frame: ``world_coords = [x_north, y_east]``.
 
-        Internally, the map plane is treated as [x_east, y_north],
-        and grid indices are:
-            row ~ y_north / resolution
-            col ~ x_east / resolution
+        Internally, the map plane is treated as ``[x_east, y_north]``, and grid indices are:
+        ``row ≈ y_north / resolution`` and ``col ≈ x_east / resolution``.
 
-        Parameters
-        ----------
-        world_coords : array_like
-            World coordinates [x, y] in the selected coordinate_frame.
-
-        Returns
-        -------
-        np.ndarray
-            Grid coordinates [row, column].
+        :param world_coords: World coordinates ``[x, y]`` in the selected ``coordinate_frame``.
+        :type world_coords: array_like
+        :returns: Grid coordinates ``[row, column]``.
+        :rtype: numpy.ndarray
+        :raises ValueError: If ``world_coords`` is not a 2-element vector.
         """
         world_coords = np.asarray(world_coords, dtype=float)
         if world_coords.shape[0] != 2:
-            raise ValueError("world_coords must be a 2-element array-like [x, y].")
+            raise ValueError(
+                "world_coords must be a 2-element array-like [x, y].")
 
         ox, oy, oyaw = self.__origin
 
@@ -429,30 +440,23 @@ class Graph:
 
         return np.array([row, col])
 
-        return grid_coords
-
     def grid_to_world(self, grid_coords):
         """
         Transform grid coordinates to world coordinates.
 
-        In ENU frame:
-            returned [x_east, y_north]
-        In NED frame:
-            returned [x_north, y_east]
+        In ENU frame: returns ``[x_east, y_north]``.
+        In NED frame: returns ``[x_north, y_east]``.
 
-        Parameters
-        ----------
-        grid_coords : array_like
-            Grid coordinates [row, column].
-
-        Returns
-        -------
-        np.ndarray
-            World coordinates [x, y] in the selected coordinate_frame.
+        :param grid_coords: Grid coordinates ``[row, column]``.
+        :type grid_coords: array_like
+        :returns: World coordinates ``[x, y]`` in the selected ``coordinate_frame``.
+        :rtype: numpy.ndarray
+        :raises ValueError: If ``grid_coords`` is not a 2-element vector.
         """
         grid_coords = np.asarray(grid_coords, dtype=float)
         if grid_coords.shape[0] != 2:
-            raise ValueError("grid_coords must be a 2-element array-like [row, col].")
+            raise ValueError(
+                "grid_coords must be a 2-element array-like [row, col].")
 
         row, col = grid_coords[0], grid_coords[1]
         ox, oy, oyaw = self.__origin
@@ -483,15 +487,24 @@ class Graph:
 
     def is_free_path(self, point1, point2):
         """
-        Check if the straight line path between two points is free of obstacles.
+        Check if the straight line path between two world points is obstacle-free.
 
-        :param point1: World coordinates of the first point as a numpy array [x, y].
-        :param point2: World coordinates of the second point as a numpy array [x, y].
-        :returns: True if the path is free of obstacles, False otherwise.
+        :param point1: World coordinates of the first point ``[x, y]``.
+        :type point1: array_like
+        :param point2: World coordinates of the second point ``[x, y]``.
+        :type point2: array_like
+        :returns: ``True`` if the path is free of obstacles, ``False`` otherwise.
+        :rtype: bool
         """
         # Convery world to grid
         pg1 = self.world_to_grid(point1).astype(int)
         pg2 = self.world_to_grid(point2).astype(int)
+
+        # Check out of bounds
+        rows, cols = self.__grid.shape
+        if (pg1[0] < 0 or pg1[0] >= rows or pg1[1] < 0 or pg1[1] >= cols or
+                pg2[0] < 0 or pg2[0] >= rows or pg2[1] < 0 or pg2[1] >= cols):
+            return False
 
         # Get all points in the line using Bresenham's algorithm, so implement it here
         from .utils import bresenham
@@ -507,14 +520,16 @@ class Graph:
         """
         Calculate the distance from a world point to the closest obstacle.
 
-        :param world_point: World coordinates of the point as a numpy array [x, y].
+        :param world_point: World coordinates of the point ``[x, y]``.
+        :type world_point: array_like
         :returns: Distance to the closest obstacle in meters.
+        :rtype: float
         """
         # Convert world to grid
         pg = self.world_to_grid(world_point).astype(int)
 
         # Compute distance transform (distance to nearest obstacle)
-        obstacle_mask = ( self.__grid > self.__treshold).astype(np.uint8)
+        obstacle_mask = (self.__grid > self.__treshold).astype(np.uint8)
         distance_map = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
 
         # Get distance in pixels and convert to meters
@@ -528,27 +543,24 @@ class Graph:
         Plot the occupancy grid in real-world coordinates.
 
         The horizontal axis is East [m], the vertical axis is North [m].
-        This convention is fixed; the coordinate_frame only changes how
+        This convention is fixed; the ``coordinate_frame`` only changes how
         world coordinates map into this plot.
 
-        Parameters
-        ----------
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on. If None, a new figure and axes are created.
-        show_start_goal : bool, optional
-            If True, plot start and goal points if available.
-        show_colorbar : bool, optional
-            If True, add a colorbar for the occupancy values.
-        **imshow_kwargs :
-            Extra keyword arguments passed to plt.imshow (e.g., cmap="gray").
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-            The axes with the plot.
+        :param ax: Axes to draw on. If ``None``, a new figure and axes are created.
+        :type ax: matplotlib.axes.Axes | None
+        :param show_start_goal: Plot start and goal points if available.
+        :type show_start_goal: bool
+        :param show_colorbar: Add a colorbar for occupancy values.
+        :type show_colorbar: bool
+        :param imshow_kwargs: Extra keyword arguments passed to ``plt.imshow`` (e.g., ``cmap="gray"``).
+        :type imshow_kwargs: dict
+        :returns: The axes with the plot.
+        :rtype: matplotlib.axes.Axes
+        :raises RuntimeError: If the grid is not initialized yet.
         """
         if self.__grid is None:
-            raise RuntimeError("Grid not initialized; load an image or YAML first.")
+            raise RuntimeError(
+                "Grid not initialized; load an image or YAML first.")
 
         if ax is None:
             fig, ax = plt.subplots()
@@ -556,17 +568,20 @@ class Graph:
         height, width = self.__grid.shape
 
         # Real-world extents in meters (map plane)
-        extent = [0.0, self.real_width, 0.0, self.real_height]
+        extent = [0.0, self.width, 0.0, self.height]
 
         imshow_defaults = dict(origin="lower", extent=extent)
         imshow_defaults.update(imshow_kwargs)
 
         im = ax.imshow(self.__grid, **imshow_defaults)
 
+        start_grid = self.world_to_grid(self.__start) if self.__start is not None else None
+        goal_grid = self.world_to_grid(self.__goal) if self.__goal is not None else None
+
         # Start and goal markers (converted to world EN plane)
         if show_start_goal:
-            if self.__start is not None:
-                r, c = self.__start
+            if start_grid is not None:
+                r, c = start_grid
                 # grid_to_world expects [row, col]
                 w_start = self.grid_to_world(np.array([r, c]))
                 # Convert world to internal EN for plotting
@@ -577,8 +592,8 @@ class Graph:
                     x_plot, y_plot = w_start[1], w_start[0]
                 ax.plot(x_plot, y_plot, "go", label="start")
 
-            if self.__goal is not None:
-                r, c = self.__goal
+            if goal_grid is not None:
+                r, c = goal_grid
                 w_goal = self.grid_to_world(np.array([r, c]))
                 if self.__frame == "ENU":
                     x_plot, y_plot = w_goal[0], w_goal[1]
@@ -593,10 +608,30 @@ class Graph:
             ax.set_xlabel(r"$x$, East [m]")
             ax.set_ylabel(r"$y$, North [m]")
 
-        if show_start_goal and (self.__start is not None or self.__goal is not None):
+        if show_start_goal and ((start_grid is not None) or (goal_grid is not None)):
             ax.legend()
 
         if show_colorbar:
             plt.colorbar(im, ax=ax, label="Occupancy / cost")
 
         return ax
+
+    def is_free(self, world_point):
+        """
+        Check if a world point is in free space.
+
+        :param world_point: World coordinates of the point ``[x, y]``.
+        :type world_point: array_like
+        :returns: ``True`` if the point is free; ``False`` if it is an obstacle or out of bounds.
+        :rtype: bool
+        """
+        # Convert world to grid
+        pg = self.world_to_grid(world_point).astype(int)
+
+        # check out of bounds
+        if pg[0] < 0 or pg[0] >= self.__grid.shape[0] or pg[1] < 0 or pg[1] >= self.__grid.shape[1]:
+            return False
+
+        if self.__grid[pg[0], pg[1]] > self.__treshold:
+            return False
+        return True
