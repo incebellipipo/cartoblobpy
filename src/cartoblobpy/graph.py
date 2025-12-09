@@ -538,7 +538,7 @@ class Graph:
 
         return distance_meters
 
-    def plot(self, ax=None, show_start_goal=True, show_colorbar=True, **imshow_kwargs):
+    def plot(self, ax=None, show_start_goal=True, show_colorbar=False, **imshow_kwargs) -> plt.Axes:
         """
         Plot the occupancy grid in real-world coordinates.
 
@@ -573,7 +573,11 @@ class Graph:
         imshow_defaults = dict(origin="lower", extent=extent)
         imshow_defaults.update(imshow_kwargs)
 
-        im = ax.imshow(self.__grid, **imshow_defaults)
+        # Create a masked array where values of 0 are invalid (transparent)
+        grid_to_plot = np.ma.masked_where(self.__grid == 0, self.__grid)
+
+        # Plot the masked array instead of the raw grid
+        im = ax.imshow(grid_to_plot, **imshow_defaults)
 
         start_grid = self.world_to_grid(self.__start) if self.__start is not None else None
         goal_grid = self.world_to_grid(self.__goal) if self.__goal is not None else None
