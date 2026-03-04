@@ -14,6 +14,7 @@ import scipy
 import yaml
 import os
 
+from .utils import bresenham
 
 class Graph:
     """
@@ -41,7 +42,7 @@ class Graph:
         self.__grid = None
         self.__nodes = nx.Graph()
 
-        self.__treshold = 0.6  # treshold for obstacles
+        self.__threshold = 0.6  # treshold for obstacles
 
         # Resolution of the grid in world coordinates (meters per pixel)
         self.__resolution = 1.0
@@ -52,6 +53,9 @@ class Graph:
         # "ENU": world = [x_east, y_north]
         # "NED": world = [x_north, y_east]
         self.__frame = "ENU"
+
+        self.__distance_map = None  # Distance to nearest obstacle for each cell, in pixels
+        self.__obstacle_mask = None  # Binary mask of obstacles (1=obstacle, 0=free)
 
     def inflate_obstacles(self, radius, use_world_units=True):
         """
@@ -77,7 +81,7 @@ class Graph:
             return self.__grid
 
         # Binary obstacle mask: 1 = obstacle, 0 = free
-        obstacle_mask = (self.__grid > self.__treshold).astype(np.uint8)
+        obstacle_mask = (self.__grid > self.__threshold).astype(np.uint8)
 
         # Distance transform from free space to nearest obstacle (in pixels)
         distance_pixels = scipy.ndimage.distance_transform_edt(
@@ -215,7 +219,7 @@ class Graph:
 
         for r, c in product(range(rows), range(cols)):
 
-            if self.__grid[r, c] > self.__treshold:
+            if self.__grid[r, c] > self.__threshold:
                 continue
 
             self.__nodes.add_node((r, c))
@@ -228,6 +232,11 @@ class Graph:
                         (r, c), (nr, nc), weight=(
                             np.sqrt(dr**2 + dc**2) * (1 + self.__grid[nr, nc]))
                     )
+
+    def compute_distances(self):
+        # Compute distance transform (distance to nearest obstacle)
+        self.__obstacle_mask = (self.__grid > self.__threshold).astype(np.uint8)
+        self.__distance_map = scipy.ndimage.distance_transform_edt(1 - self.__obstacle_mask)
 
     @property
     def nodes(self):
@@ -367,7 +376,7 @@ class Graph:
         :returns: Occupancy threshold value.
         :rtype: float
         """
-        return self.__treshold
+        return self.__threshold
 
     @property
     def coordinate_frame(self):
@@ -507,11 +516,10 @@ class Graph:
             return False
 
         # Get all points in the line using Bresenham's algorithm, so implement it here
-        from .utils import bresenham
 
         line_points = bresenham(pg1[0], pg1[1], pg2[0], pg2[1])
         for r, c in line_points:
-            if self.__grid[r, c] > self.__treshold:
+            if self.__grid[r, c] > self.__threshold:
                 return False
 
         return True
@@ -529,12 +537,11 @@ class Graph:
         pg = self.world_to_grid(world_point).astype(int)
 
         # Compute distance transform (distance to nearest obstacle)
-        obstacle_mask = (self.__grid > self.__treshold).astype(np.uint8)
-        distance_map = scipy.ndimage.distance_transform_edt(1 - obstacle_mask)
+        if self.__distance_map is None:
+            self.compute_distances()
 
         # Get distance in pixels and convert to meters
-        distance_pixels = distance_map[pg[0], pg[1]]
-        distance_meters = distance_pixels * self.__resolution
+        distance_meters = self.__distance_map[pg[0], pg[1]] * self.__resolution
 
         return distance_meters
 
@@ -636,6 +643,6 @@ class Graph:
         if pg[0] < 0 or pg[0] >= self.__grid.shape[0] or pg[1] < 0 or pg[1] >= self.__grid.shape[1]:
             return False
 
-        if self.__grid[pg[0], pg[1]] > self.__treshold:
+        if self.__grid[pg[0], pg[1]] > self.__threshold:
             return False
         return True
