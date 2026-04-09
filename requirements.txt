@@ -1,7 +1,9 @@
-shoeboxpy
 numpy
 scipy
 matplotlib
-casadi
 networkx
 pyyaml
+geopandas
+osmnx
+shapely
+pyproj
