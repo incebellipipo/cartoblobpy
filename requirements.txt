@@ -7,3 +7,5 @@ geopandas
 osmnx
 shapely
 pyproj
+rasterio
+fiona
