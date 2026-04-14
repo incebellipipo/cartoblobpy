@@ -619,7 +619,7 @@ class Graph:
 
         return distance_meters
 
-    def plot(self, ax=None, show_start_goal=True, show_colorbar=False, **imshow_kwargs) -> plt.Axes:
+    def plot(self, ax=None, show_start_goal=True, show_colorbar=False, layer_name: str = None, **imshow_kwargs) -> plt.Axes:
         """
         Plot the occupancy grid in real-world coordinates.
 
@@ -633,15 +633,35 @@ class Graph:
         :type show_start_goal: bool
         :param show_colorbar: Add a colorbar for occupancy values.
         :type show_colorbar: bool
+        :param layer_name: Optional layer name to plot instead of the base occupancy grid.
+        :type layer_name: str | None
         :param imshow_kwargs: Extra keyword arguments passed to ``plt.imshow`` (e.g., ``cmap="gray"``).
         :type imshow_kwargs: dict
         :returns: The axes with the plot.
         :rtype: matplotlib.axes.Axes
         :raises RuntimeError: If the grid is not initialized yet.
+        :raises KeyError: If ``layer_name`` is unknown.
+        :raises ValueError: If the requested layer has no associated image map.
         """
         if self.__grid is None:
             raise RuntimeError(
                 "Grid not initialized; load an image or YAML first.")
+
+        if layer_name is None:
+            grid_to_plot = self.__grid
+            plot_title = "Base occupancy"
+            colorbar_label = "Occupancy / cost"
+        else:
+            if layer_name not in self.__layer_maps:
+                raise KeyError(f"Unknown layer '{layer_name}'.")
+            layer_map = self.__layer_maps[layer_name]
+            if layer_map is None:
+                raise ValueError(
+                    f"Layer '{layer_name}' has no image map and cannot be plotted."
+                )
+            grid_to_plot = layer_map
+            plot_title = f"Layer: {layer_name}"
+            colorbar_label = f"Layer value ({layer_name})"
 
         if ax is None:
             fig, ax = plt.subplots()
@@ -654,11 +674,12 @@ class Graph:
         imshow_defaults = dict(origin="lower", extent=extent)
         imshow_defaults.update(imshow_kwargs)
 
-        # Create a masked array where values of 0 are invalid (transparent)
-        grid_to_plot = np.ma.masked_where(self.__grid == 0, self.__grid)
+        if layer_name is None:
+            # For occupancy view, treat zero values as transparent free-space background.
+            grid_to_plot = np.ma.masked_where(grid_to_plot == 0, grid_to_plot)
 
-        # Plot the masked array instead of the raw grid
         im = ax.imshow(grid_to_plot, **imshow_defaults)
+        ax.set_title(plot_title)
 
         start_grid = self.world_to_grid(self.__start) if self.__start is not None else None
         goal_grid = self.world_to_grid(self.__goal) if self.__goal is not None else None
@@ -697,7 +718,7 @@ class Graph:
             ax.legend()
 
         if show_colorbar:
-            plt.colorbar(im, ax=ax, label="Occupancy / cost")
+            plt.colorbar(im, ax=ax, label=colorbar_label)
 
         return ax
 
@@ -720,3 +741,47 @@ class Graph:
         if self.__grid[pg[0], pg[1]] > self.__threshold:
             return False
         return True
+
+    def value_at(self, point, layer_name: str = None) -> float:
+        """
+        Get the map value at a world-coordinate point.
+
+        If ``layer_name`` is ``None``, this samples the base occupancy grid.
+        Otherwise, it samples the named layer loaded from YAML.
+
+        :param point: World coordinates of the point ``[x, y]``.
+        :type point: array_like
+        :param layer_name: Optional layer name to sample. Uses base grid when ``None``.
+        :type layer_name: str | None
+        :returns: Sampled value at the corresponding grid cell.
+        :rtype: float
+        :raises RuntimeError: If the grid is not initialized.
+        :raises IndexError: If the point maps outside the grid.
+        :raises KeyError: If ``layer_name`` is unknown.
+        :raises ValueError: If the requested layer has no associated image map.
+        """
+        if self.__grid is None:
+            raise RuntimeError("Grid not initialized; load an image or YAML first.")
+
+        # Match typical occupancy-grid indexing behavior used by callers.
+        row, col = np.floor(self.world_to_grid(point)).astype(int)
+
+        rows, cols = self.__grid.shape
+        if row < 0 or row >= rows or col < 0 or col >= cols:
+            raise IndexError(
+                f"Point {point} maps to out-of-bounds grid index ({row}, {col})."
+            )
+
+        if layer_name is None:
+            return float(self.__grid[row, col])
+
+        if layer_name not in self.__layer_maps:
+            raise KeyError(f"Unknown layer '{layer_name}'.")
+
+        layer_map = self.__layer_maps[layer_name]
+        if layer_map is None:
+            raise ValueError(
+                f"Layer '{layer_name}' has no image map and cannot be sampled."
+            )
+
+        return float(layer_map[row, col])

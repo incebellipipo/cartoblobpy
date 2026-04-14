@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 from PIL import Image
@@ -125,6 +126,85 @@ class TestGraphGridOps(unittest.TestCase):
         # world point [x=2, y=3] -> grid [row=3, col=2], adjacent to obstacle at [2,2]
         d = g.distance_to_closest_obstacle(np.array([2.0, 3.0]))
         self.assertAlmostEqual(d, 1.0)
+
+    def test_plot_with_layer_name(self):
+        g = Graph()
+        grid = np.zeros((3, 3), dtype=float)
+        self._set_grid(g, grid)
+        g._Graph__layer_maps = {"traffic": np.full((3, 3), 0.4, dtype=float)}
+
+        fig, ax = plt.subplots()
+        try:
+            g.plot(ax=ax, layer_name="traffic")
+            self.assertEqual(ax.get_title(), "Layer: traffic")
+        finally:
+            plt.close(fig)
+
+    def test_plot_with_unknown_layer_raises(self):
+        g = Graph()
+        self._set_grid(g, np.zeros((3, 3), dtype=float))
+
+        with self.assertRaises(KeyError):
+            g.plot(layer_name="missing")
+
+    def test_plot_with_empty_layer_raises(self):
+        g = Graph()
+        self._set_grid(g, np.zeros((3, 3), dtype=float))
+        g._Graph__layer_maps = {"traffic": None}
+
+        with self.assertRaises(ValueError):
+            g.plot(layer_name="traffic")
+
+    def test_value_at_base_grid(self):
+        g = Graph()
+        grid = np.zeros((4, 4), dtype=float)
+        grid[2, 1] = 0.75
+        self._set_grid(g, grid)
+        g.resolution = 1.0
+        g.origin = np.array([0.0, 0.0, 0.0])
+
+        self.assertAlmostEqual(g.value_at(np.array([1.0, 2.0])), 0.75)
+
+    def test_value_at_named_layer(self):
+        g = Graph()
+        grid = np.zeros((4, 4), dtype=float)
+        self._set_grid(g, grid)
+        g.resolution = 1.0
+        g.origin = np.array([0.0, 0.0, 0.0])
+
+        layer = np.zeros((4, 4), dtype=float)
+        layer[3, 2] = 0.2
+        g._Graph__layer_maps = {"traffic": layer}
+
+        self.assertAlmostEqual(g.value_at(np.array([2.0, 3.0]), "traffic"), 0.2)
+
+    def test_value_at_out_of_bounds_raises(self):
+        g = Graph()
+        self._set_grid(g, np.zeros((3, 3), dtype=float))
+        g.resolution = 1.0
+        g.origin = np.array([0.0, 0.0, 0.0])
+
+        with self.assertRaises(IndexError):
+            g.value_at(np.array([10.0, 10.0]))
+
+    def test_value_at_unknown_layer_raises(self):
+        g = Graph()
+        self._set_grid(g, np.zeros((3, 3), dtype=float))
+        g.resolution = 1.0
+        g.origin = np.array([0.0, 0.0, 0.0])
+
+        with self.assertRaises(KeyError):
+            g.value_at(np.array([0.0, 0.0]), "missing")
+
+    def test_value_at_layer_without_map_raises(self):
+        g = Graph()
+        self._set_grid(g, np.zeros((3, 3), dtype=float))
+        g.resolution = 1.0
+        g.origin = np.array([0.0, 0.0, 0.0])
+        g._Graph__layer_maps = {"empty": None}
+
+        with self.assertRaises(ValueError):
+            g.value_at(np.array([0.0, 0.0]), "empty")
 
 
 class TestGraphYamlImageLoading(unittest.TestCase):
