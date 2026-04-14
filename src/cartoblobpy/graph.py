@@ -56,6 +56,35 @@ class Graph:
 
         self.__distance_map = None  # Distance to nearest obstacle for each cell, in pixels
         self.__obstacle_mask = None  # Binary mask of obstacles (1=obstacle, 0=free)
+        self.__layer_maps = {}  # Optional named layers loaded from YAML
+        self.__layer_names = []  # Preserve layer order from YAML
+
+    def _resolve_image_path(self, image_file, yaml_file=None):
+        if os.path.isabs(image_file):
+            return image_file
+
+        if yaml_file is None:
+            return image_file
+
+        yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
+        return os.path.join(yaml_dir, image_file)
+
+    def _load_grayscale_layer(self, image_file, expected_shape=None):
+        img = Image.open(image_file).convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
+        rgba = np.array(img, dtype=float)
+        rgb = rgba[..., :3]
+        alpha = rgba[..., 3] / 255.0
+        luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        # Interpret RGBA layers as composited over white so transparent areas contribute zero cost.
+        layer = (1.0 - (luminance / 255.0)) * alpha
+        layer = np.clip(layer, 0.0, 1.0)
+
+        if expected_shape is not None and layer.shape != expected_shape:
+            raise ValueError(
+                f"Layer image '{image_file}' must match base image shape {expected_shape}, got {layer.shape}."
+            )
+
+        return layer
 
     def inflate_obstacles(self, radius, use_world_units=True):
         """
@@ -122,8 +151,11 @@ class Graph:
 
         Optional keys:
 
-        - ``start``: Grid coordinates ``(row, column)`` for the start point.
-        - ``goal``: Grid coordinates ``(row, column)`` for the goal point.
+                - ``start``: Grid coordinates ``(row, column)`` for the start point.
+                - ``goal``: Grid coordinates ``(row, column)`` for the goal point.
+                - ``layers``: Ordered list of named layer images. Each entry must be a
+                        mapping with ``name`` and ``file`` keys.
+                        Layer images are loaded as grayscale darkness values in ``[0, 1]``.
 
         :param yaml_file: Path to the YAML file to load.
         :type yaml_file: str
@@ -135,12 +167,7 @@ class Graph:
         if 'image' not in config:
             raise ValueError("YAML file must contain 'image' key.")
 
-        image_file = config['image']
-
-        # If the image path is not absolute, make it relative to the YAML file
-        if not os.path.isabs(image_file):
-            yaml_dir = os.path.dirname(os.path.abspath(yaml_file))
-            image_file = os.path.join(yaml_dir, image_file)
+        image_file = self._resolve_image_path(config['image'], yaml_file)
 
         if 'resolution' in config:
             self.__resolution = config['resolution']
@@ -155,6 +182,34 @@ class Graph:
             self.__goal = tuple(config['goal'])
 
         self.load_from_image(image_file)
+
+        self.__layer_maps = {}
+        self.__layer_names = []
+
+        layers = config.get('layers')
+        if layers:
+            if not isinstance(layers, list):
+                raise ValueError("'layers' must be a list of mappings with 'name' and 'file' keys.")
+
+            for layer_config in layers:
+                if not isinstance(layer_config, dict):
+                    raise ValueError("Each layer entry must be a mapping with 'name' and 'file' keys.")
+                if 'name' not in layer_config or 'file' not in layer_config:
+                    raise ValueError("Each layer entry must contain 'name' and 'file' keys.")
+
+                layer_name = layer_config['name']
+                layer_image = layer_config['file']
+
+                self.__layer_names.append(layer_name)
+                if layer_image in (None, ''):
+                    self.__layer_maps[layer_name] = None
+                    continue
+
+                layer_path = self._resolve_image_path(layer_image, yaml_file)
+                self.__layer_maps[layer_name] = self._load_grayscale_layer(
+                    layer_path,
+                    expected_shape=self.__grid.shape,
+                )
 
     def load_from_image(self, image_file):
         """
@@ -174,14 +229,18 @@ class Graph:
         img = Image.open(image_file).convert(
             "RGBA").transpose(Image.FLIP_TOP_BOTTOM)
 
+        self.__layer_maps = {}
+        self.__layer_names = []
+
         # Convert to NumPy array
         grid = np.array(img)
 
         self.__grid = grid[:, :, 3] / 255.0  # Alpha channel
 
         # Find all pixels for start (green) and goal (red)
-        start_mask = np.all(grid[:, :, :3] == [0, 255, 0], axis=-1)
-        goal_mask = np.all(grid[:, :, :3] == [255, 0, 0], axis=-1)
+        visible_mask = grid[:, :, 3] > 0
+        start_mask = np.all(grid[:, :, :3] == [0, 255, 0], axis=-1) & visible_mask
+        goal_mask = np.all(grid[:, :, :3] == [255, 0, 0], axis=-1) & visible_mask
 
         # Mark start and goal areas as free space in occupancy map
         self.__grid[start_mask] = 0
@@ -222,7 +281,12 @@ class Graph:
             if self.__grid[r, c] > self.__threshold:
                 continue
 
-            self.__nodes.add_node((r, c))
+            node_attributes = {layer_name: None for layer_name in self.__layer_names}
+            for layer_name, layer_map in self.__layer_maps.items():
+                if layer_map is not None:
+                    node_attributes[layer_name] = float(layer_map[r, c])
+
+            self.__nodes.add_node((r, c), **node_attributes)
 
             for dr, dc in (p for p in product([1, 0, -1], repeat=2) if p != (0, 0)):
 
@@ -267,6 +331,16 @@ class Graph:
         :rtype: numpy.ndarray
         """
         return self.__grid
+
+    @property
+    def layers(self):
+        """
+        Get the loaded layer maps.
+
+        :returns: Mapping from layer name to a 2D numpy array in [0, 1] or None if the layer has no file.
+        :rtype: dict[str, numpy.ndarray | None]
+        """
+        return self.__layer_maps
 
     @property
     def goal(self):

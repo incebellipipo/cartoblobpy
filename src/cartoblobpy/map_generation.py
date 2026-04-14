@@ -19,6 +19,7 @@ def create_map(
     output_yaml: str = "map.yaml",
     water_color: str = "#2A7FFF",
     land_color: str = "#3CB371",
+    transparent_water: bool = False,
     snap_tolerance: float = 100.0,
     dpi: int = 100
 ):
@@ -36,6 +37,7 @@ def create_map(
     - output_yaml: Filename for the generated YAML metadata (default: "map.yaml").
     - water_color: Hex color code for water areas (default: "#2A7FFF").
     - land_color: Hex color code for land areas (default: "#3CB371").
+    - transparent_water: If True, renders water as transparent in the saved PNG (default: False).
     - snap_tolerance: Distance in meters to snap open coastline endpoints to the bounding box (default: 100.0 m).
     - dpi: Dots per inch for the output image (default: 100). Don't touch it.
     """
@@ -147,13 +149,17 @@ def create_map(
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
 
-    gpd.GeoSeries([bbox_geom]).plot(ax=ax, color=water_color, edgecolor="none")
+    if transparent_water:
+        fig.patch.set_alpha(0)
+        ax.patch.set_alpha(0)
+    else:
+        gpd.GeoSeries([bbox_geom]).plot(ax=ax, color=water_color, edgecolor="none")
 
     if land_polys:
         unified_land = unary_union([p.buffer(0.001) for p in land_polys if p.is_valid]).buffer(-0.001)
         gpd.GeoSeries([unified_land]).plot(ax=ax, color=land_color, edgecolor=land_color, linewidth=0.5)
 
-    if water_utm is not None and not water_utm.empty:
+    if not transparent_water and water_utm is not None and not water_utm.empty:
         water_polygons_only = water_utm[water_utm.geometry.geom_type.isin(['Polygon', 'MultiPolygon'])]
         if not water_polygons_only.empty:
             water_polygons_only.plot(ax=ax, color=water_color, edgecolor="none")
@@ -162,7 +168,7 @@ def create_map(
     ax.set_ylim(miny, maxy)
     ax.axis("off")
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    plt.savefig(output, bbox_inches='tight', pad_inches=0)
+    plt.savefig(output, bbox_inches='tight', pad_inches=0, transparent=transparent_water)
 
     # 5. Generate YAML Metadata File
     map_yaml = {

@@ -2,9 +2,11 @@ import math
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import networkx as nx
 import numpy as np
+from PIL import Image
 
 from cartoblobpy.graph import Graph
 
@@ -137,6 +139,88 @@ class TestGraphYamlImageLoading(unittest.TestCase):
         self.assertIsNotNone(g.grid)
         self.assertAlmostEqual(g.resolution, 0.05)
         np.testing.assert_allclose(g.origin, np.array([0.0, 0.0, 0.0]))
+
+    def test_load_from_yaml_with_layers(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            base_image = Image.new("RGBA", (4, 4), (255, 255, 255, 0))
+            base_image.save(tmp_path / "base.png")
+
+            layer_image = Image.new("L", (4, 4), 255)
+            layer_image.putpixel((1, 1), 0)
+            layer_image.save(tmp_path / "layer_a.png")
+
+            yaml_path = tmp_path / "map.yaml"
+            yaml_path.write_text(
+                "\n".join(
+                    [
+                        "image: ./base.png",
+                        "resolution: 1.0",
+                        "origin: [0.0, 0.0, 0.0]",
+                        "layers:",
+                        "  - name: layer_a",
+                        "    file: ./layer_a.png",
+                        "  - name: layer_b",
+                        "    file: null",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            g = Graph()
+            g.load_from_yaml(str(yaml_path))
+            g.build_graph()
+
+            self.assertIn("layer_a", g.layers)
+            self.assertIn("layer_b", g.layers)
+            self.assertIsNone(g.layers["layer_b"])
+            np.testing.assert_allclose(g.layers["layer_a"][2, 1], 1.0)
+            np.testing.assert_allclose(g.layers["layer_a"][0, 0], 0.0)
+
+            self.assertIn((0, 0), g.nodes)
+            self.assertAlmostEqual(g.nodes.nodes[(0, 0)]["layer_a"], 0.0)
+            self.assertIsNone(g.nodes.nodes[(0, 0)]["layer_b"])
+            self.assertAlmostEqual(g.nodes.nodes[(2, 1)]["layer_a"], 1.0)
+
+    def test_load_from_yaml_with_rgba_layer_respects_alpha(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            base_image = Image.new("RGBA", (2, 2), (255, 255, 255, 0))
+            base_image.save(tmp_path / "base.png")
+
+            # Build RGBA layer where darkness is encoded in RGB and alpha scales contribution.
+            layer_image = Image.new("RGBA", (2, 2), (255, 255, 255, 0))
+            layer_image.putpixel((0, 0), (0, 0, 0, 255))      # fully dark, fully visible -> 1.0
+            layer_image.putpixel((1, 0), (0, 0, 0, 128))      # fully dark, 50% alpha -> ~0.502
+            layer_image.putpixel((0, 1), (0, 0, 0, 0))        # fully dark, transparent -> 0.0
+            layer_image.putpixel((1, 1), (255, 255, 255, 255))  # white, visible -> 0.0
+            layer_image.save(tmp_path / "layer_rgba.png")
+
+            yaml_path = tmp_path / "map.yaml"
+            yaml_path.write_text(
+                "\n".join(
+                    [
+                        "image: ./base.png",
+                        "resolution: 1.0",
+                        "origin: [0.0, 0.0, 0.0]",
+                        "layers:",
+                        "  - name: traffic",
+                        "    file: ./layer_rgba.png",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            g = Graph()
+            g.load_from_yaml(str(yaml_path))
+
+            # Images are flipped top-bottom on load, so row 0 corresponds to source y=1.
+            np.testing.assert_allclose(g.layers["traffic"][1, 0], 1.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["traffic"][1, 1], 128.0 / 255.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["traffic"][0, 0], 0.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["traffic"][0, 1], 0.0, rtol=0, atol=1e-6)
 
 
 if __name__ == "__main__":

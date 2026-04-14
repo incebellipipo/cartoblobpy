@@ -1,3 +1,6 @@
 cache
 *.png
 *.yaml
+!map.yaml
+!map_traffic.png
+!map.png
