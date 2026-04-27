@@ -1,0 +1,24 @@
+image: ./base.png
+negate: 0
+free_thresh: 0.196
+occupied_thresh: 0.65
+resolution: 5.022222
+origin:
+- 0.0
+- 0.0
+- 0.0
+layers:
+- name: depth
+  file: ./depth.png
+  values:
+    '#4a98c9': 0.0
+    '#3e8ec4': 1.0
+    '#3383be': 2.0
+    '#2979b9': 5.0
+    '#1f6eb3': 10.0
+    '#1764ab': 20.0
+    '#0e59a2': 50.0
+    '#084f99': 100.0
+    '#08458a': 200.0
+    '#083a7a': 350.0
+    '#08306b': 500.0

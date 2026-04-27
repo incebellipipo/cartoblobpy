@@ -3,6 +3,8 @@ scipy
 matplotlib
 networkx
 pyyaml
+pytest
+
 geopandas
 osmnx
 shapely

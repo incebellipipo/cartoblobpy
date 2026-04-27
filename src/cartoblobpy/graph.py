@@ -8,6 +8,7 @@ graphs from images for use in path planning algorithms.
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import networkx as nx
 from itertools import product
 import scipy
@@ -86,6 +87,166 @@ class Graph:
 
         return layer
 
+    def _load_rgba_layer(self, image_file, expected_shape=None):
+        img = Image.open(image_file).convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
+        rgba = np.array(img, dtype=np.uint8)
+
+        if expected_shape is not None and rgba.shape[:2] != expected_shape[:2]:
+            raise ValueError(
+                f"Layer image '{image_file}' must match base image shape {expected_shape[:2]}, got {rgba.shape[:2]}."
+            )
+
+        return rgba
+
+    def _classify_value_mapping(self, values, layer_name):
+        if not isinstance(values, dict):
+            raise ValueError(
+                f"Layer '{layer_name}' values must be a mapping from either normalized grayscale values or colors to physical values."
+            )
+
+        if len(values) == 0:
+            raise ValueError(f"Layer '{layer_name}' values mapping cannot be empty.")
+
+        numeric_keys = 0
+        for key in values.keys():
+            try:
+                float(key)
+            except (TypeError, ValueError):
+                continue
+            numeric_keys += 1
+
+        if numeric_keys == len(values):
+            return "grayscale"
+
+        if numeric_keys == 0:
+            return "color"
+
+        raise ValueError(
+            f"Layer '{layer_name}' values must use either all numeric grayscale keys or all color keys."
+        )
+
+    def _apply_grayscale_value_mapping(self, layer, values, layer_name):
+        points = []
+        for grayscale_value, physical_value in values.items():
+            try:
+                grayscale = float(grayscale_value)
+                physical = float(physical_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Layer '{layer_name}' values must use numeric grayscale keys and numeric physical values."
+                ) from exc
+
+            if grayscale < 0.0 or grayscale > 1.0:
+                raise ValueError(
+                    f"Layer '{layer_name}' grayscale keys must be within [0, 1], got {grayscale}."
+                )
+
+            points.append((grayscale, physical))
+
+        points.sort(key=lambda item: item[0])
+        grayscale_values = np.array([point[0] for point in points], dtype=float)
+        physical_values = np.array([point[1] for point in points], dtype=float)
+
+        if grayscale_values.size == 1:
+            return np.full(layer.shape, physical_values[0], dtype=float)
+
+        return np.interp(layer, grayscale_values, physical_values)
+
+    def _parse_color_key(self, color_key, layer_name):
+        if isinstance(color_key, str):
+            color_text = color_key.strip()
+            if "," in color_text:
+                parts = [part.strip() for part in color_text.split(",")]
+                if len(parts) not in (3, 4):
+                    raise ValueError(
+                        f"Layer '{layer_name}' color key '{color_key}' must contain 3 or 4 components."
+                    )
+                try:
+                    components = np.array([float(part) for part in parts], dtype=float)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Layer '{layer_name}' color key '{color_key}' must contain numeric components."
+                    ) from exc
+                if np.max(components) <= 1.0:
+                    components = components * 255.0
+                if len(components) == 3:
+                    components = np.append(components, 255.0)
+                if np.any(components < 0.0) or np.any(components > 255.0):
+                    raise ValueError(
+                        f"Layer '{layer_name}' color key '{color_key}' must use values within [0, 255]."
+                    )
+                return np.round(components).astype(np.uint8)
+
+            try:
+                rgba = np.array(mcolors.to_rgba(color_text), dtype=float)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Layer '{layer_name}' color key '{color_key}' is not a recognized color."
+                ) from exc
+            return np.round(rgba * 255.0).astype(np.uint8)
+
+        color_array = np.asarray(color_key, dtype=float).flatten()
+        if color_array.size not in (3, 4):
+            raise ValueError(
+                f"Layer '{layer_name}' color keys must have 3 or 4 components."
+            )
+
+        if np.max(color_array) <= 1.0:
+            color_array = color_array * 255.0
+
+        if color_array.size == 3:
+            color_array = np.append(color_array, 255.0)
+
+        if np.any(color_array < 0.0) or np.any(color_array > 255.0):
+            raise ValueError(
+                f"Layer '{layer_name}' color keys must use values within [0, 255]."
+            )
+
+        return np.round(color_array).astype(np.uint8)
+
+    def _apply_color_value_mapping(self, layer, values, layer_name):
+        if layer.ndim != 3 or layer.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"Layer '{layer_name}' color mapping requires an RGB or RGBA image."
+            )
+
+        if not isinstance(values, dict):
+            raise ValueError(
+                f"Layer '{layer_name}' values must be a mapping from colors to physical values."
+            )
+
+        mapped = np.zeros(layer.shape[:2], dtype=float)
+        rgba = layer if layer.shape[-1] == 4 else np.concatenate(
+            [layer, np.full(layer.shape[:2] + (1,), 255, dtype=layer.dtype)],
+            axis=-1,
+        )
+
+        for color_key, physical_value in values.items():
+            try:
+                physical = float(physical_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Layer '{layer_name}' values must map colors to numeric physical values."
+                ) from exc
+
+            color_rgba = self._parse_color_key(color_key, layer_name)
+
+            if color_rgba.size == 3:
+                color_rgba = np.append(color_rgba, 255)
+
+            mask = np.all(rgba[:, :, :4] == color_rgba, axis=-1)
+            mapped[mask] = physical
+
+        return mapped
+
+    def _apply_value_mapping(self, layer, values, layer_name):
+        mapping_type = self._classify_value_mapping(values, layer_name)
+
+        if mapping_type == "grayscale":
+            return self._apply_grayscale_value_mapping(layer, values, layer_name)
+
+        return self._apply_color_value_mapping(layer, values, layer_name)
+
     def inflate_obstacles(self, radius, use_world_units=True):
         """
         Inflate obstacles in the grid to account for agent size.
@@ -155,7 +316,9 @@ class Graph:
                 - ``goal``: Grid coordinates ``(row, column)`` for the goal point.
                 - ``layers``: Ordered list of named layer images. Each entry must be a
                         mapping with ``name`` and ``file`` keys.
-                        Layer images are loaded as grayscale darkness values in ``[0, 1]``.
+                    Layer images are loaded as grayscale darkness values in ``[0, 1]``.
+                    If a layer also defines ``values``, the grayscale layer is mapped
+                    to physical quantities using the provided control points.
 
         :param yaml_file: Path to the YAML file to load.
         :type yaml_file: str
@@ -206,10 +369,32 @@ class Graph:
                     continue
 
                 layer_path = self._resolve_image_path(layer_image, yaml_file)
-                self.__layer_maps[layer_name] = self._load_grayscale_layer(
-                    layer_path,
-                    expected_shape=self.__grid.shape,
-                )
+                values = layer_config.get('values')
+
+                if values is not None and self._classify_value_mapping(values, layer_name) == "color":
+                    layer_map = self._load_rgba_layer(
+                        layer_path,
+                        expected_shape=self.__grid.shape,
+                    )
+                    layer_map = self._apply_value_mapping(
+                        layer_map,
+                        values,
+                        layer_name,
+                    )
+                else:
+                    layer_map = self._load_grayscale_layer(
+                        layer_path,
+                        expected_shape=self.__grid.shape,
+                    )
+
+                    if values is not None:
+                        layer_map = self._apply_value_mapping(
+                            layer_map,
+                            values,
+                            layer_name,
+                        )
+
+                self.__layer_maps[layer_name] = layer_map
 
     def load_from_image(self, image_file):
         """
@@ -219,15 +404,16 @@ class Graph:
 
         - Green pixels: start location
         - Red pixels: goal location
-        - Black pixels: obstacles
-        - Transparent/white pixels: free space
+        - Black/dark pixels: obstacles when the image has no transparency
+        - Transparent pixels: free space when the image has an alpha channel
+        - White pixels: free space in opaque grayscale/RGB maps
 
         :param image_file: Path to the image file to load.
         :type image_file: str
         """
-        # Load png and convert transparent pixels to white
-        img = Image.open(image_file).convert(
-            "RGBA").transpose(Image.FLIP_TOP_BOTTOM)
+        source_image = Image.open(image_file)
+        has_alpha = "A" in source_image.getbands() or source_image.info.get("transparency") is not None
+        img = source_image.convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
 
         self.__layer_maps = {}
         self.__layer_names = []
@@ -235,10 +421,15 @@ class Graph:
         # Convert to NumPy array
         grid = np.array(img)
 
-        self.__grid = grid[:, :, 3] / 255.0  # Alpha channel
+        if has_alpha:
+            self.__grid = grid[:, :, 3] / 255.0  # Alpha channel
+        else:
+            rgb = grid[:, :, :3].astype(float)
+            luminance = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+            self.__grid = np.clip(1.0 - (luminance / 255.0), 0.0, 1.0)
 
         # Find all pixels for start (green) and goal (red)
-        visible_mask = grid[:, :, 3] > 0
+        visible_mask = grid[:, :, 3] > 0 if has_alpha else np.ones(grid.shape[:2], dtype=bool)
         start_mask = np.all(grid[:, :, :3] == [0, 255, 0], axis=-1) & visible_mask
         goal_mask = np.all(grid[:, :, :3] == [255, 0, 0], axis=-1) & visible_mask
 

@@ -220,6 +220,26 @@ class TestGraphYamlImageLoading(unittest.TestCase):
         self.assertAlmostEqual(g.resolution, 0.05)
         np.testing.assert_allclose(g.origin, np.array([0.0, 0.0, 0.0]))
 
+    def test_load_from_image_without_alpha_uses_rgb_darkness(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            image = Image.new("RGB", (2, 2), (255, 255, 255))
+            image.putpixel((0, 0), (0, 0, 0))        # obstacle
+            image.putpixel((1, 1), (0, 255, 0))      # start
+            image.putpixel((1, 0), (255, 0, 0))      # goal
+            image.save(tmp_path / "map.png")
+
+            g = Graph()
+            g.load_from_image(str(tmp_path / "map.png"))
+
+            # Images are flipped top-bottom on load, so row 0 corresponds to source y=1.
+            np.testing.assert_allclose(g.grid[1, 0], 1.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.grid[0, 1], 0.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.grid[1, 1], 0.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.start, np.array([1.0, 0.0]), rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.goal, np.array([1.0, 1.0]), rtol=0, atol=1e-6)
+
     def test_load_from_yaml_with_layers(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -301,6 +321,94 @@ class TestGraphYamlImageLoading(unittest.TestCase):
             np.testing.assert_allclose(g.layers["traffic"][1, 1], 128.0 / 255.0, rtol=0, atol=1e-6)
             np.testing.assert_allclose(g.layers["traffic"][0, 0], 0.0, rtol=0, atol=1e-6)
             np.testing.assert_allclose(g.layers["traffic"][0, 1], 0.0, rtol=0, atol=1e-6)
+
+    def test_load_from_yaml_with_value_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            base_image = Image.new("RGBA", (2, 2), (255, 255, 255, 0))
+            base_image.save(tmp_path / "base.png")
+
+            layer_image = Image.new("L", (2, 2), 255)
+            layer_image.putpixel((0, 0), 0)
+            layer_image.putpixel((1, 0), 128)
+            layer_image.putpixel((0, 1), 255)
+            layer_image.putpixel((1, 1), 255)
+            layer_image.save(tmp_path / "depth.png")
+
+            yaml_path = tmp_path / "map.yaml"
+            yaml_path.write_text(
+                "\n".join(
+                    [
+                        "image: ./base.png",
+                        "resolution: 1.0",
+                        "origin: [0.0, 0.0, 0.0]",
+                        "layers:",
+                        "  - name: depth",
+                        "    file: ./depth.png",
+                        "    values:",
+                        "      0.0: 10.0",
+                        "      1.0: 20.0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            g = Graph()
+            g.load_from_yaml(str(yaml_path))
+            g.build_graph()
+
+            self.assertIn("depth", g.layers)
+            np.testing.assert_allclose(g.layers["depth"][0, 0], 10.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][1, 0], 20.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][0, 1], 10.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][1, 1], 10.0 + (127.0 / 255.0) * 10.0, rtol=0, atol=1e-6)
+
+    def test_load_from_yaml_with_rgba_color_value_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            base_image = Image.new("RGBA", (2, 2), (255, 255, 255, 0))
+            base_image.save(tmp_path / "base.png")
+
+            layer_image = Image.new("RGBA", (2, 2), (0, 0, 0, 0))
+            layer_image.putpixel((0, 0), (0, 255, 0, 255))
+            layer_image.putpixel((1, 0), (0, 0, 255, 255))
+            layer_image.putpixel((0, 1), (255, 255, 255, 255))
+            layer_image.putpixel((1, 1), (128, 128, 128, 255))
+            layer_image.save(tmp_path / "bathymetry_rgba.png")
+
+            yaml_path = tmp_path / "map.yaml"
+            yaml_path.write_text(
+                "\n".join(
+                    [
+                        "image: ./base.png",
+                        "resolution: 1.0",
+                        "origin: [0.0, 0.0, 0.0]",
+                        "layers:",
+                        "  - name: depth",
+                        "    file: ./bathymetry_rgba.png",
+                        "    values:",
+                        "      '#00ff00': 0.0",
+                        "      '#0000ff': 50.0",
+                        "      '#ffffff': 0.0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            g = Graph()
+            g.load_from_yaml(str(yaml_path))
+            g.build_graph()
+
+            # Images are flipped top-bottom on load, so row 0 corresponds to source y=1.
+            np.testing.assert_allclose(g.layers["depth"][1, 0], 0.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][1, 1], 50.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][0, 0], 0.0, rtol=0, atol=1e-6)
+            np.testing.assert_allclose(g.layers["depth"][0, 1], 0.0, rtol=0, atol=1e-6)
+
+            self.assertAlmostEqual(g.nodes.nodes[(1, 0)]["depth"], 0.0)
+            self.assertAlmostEqual(g.nodes.nodes[(1, 1)]["depth"], 50.0)
 
 
 if __name__ == "__main__":
