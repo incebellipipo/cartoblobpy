@@ -759,7 +759,7 @@ class Graph:
 
         return np.array([world_x, world_y])
 
-    def is_free_path(self, point1, point2):
+    def is_free_path(self, point1, point2, out_of_bounds_is_obstacle=False):
         """
         Check if the straight line path between two world points is obstacle-free.
 
@@ -774,18 +774,24 @@ class Graph:
         pg1 = self.world_to_grid(point1).astype(int)
         pg2 = self.world_to_grid(point2).astype(int)
 
-        # Check out of bounds
         rows, cols = self.__grid.shape
-        if (pg1[0] < 0 or pg1[0] >= rows or pg1[1] < 0 or pg1[1] >= cols or
-                pg2[0] < 0 or pg2[0] >= rows or pg2[1] < 0 or pg2[1] >= cols):
-            return False
+
+        # Check out of bounds
+        if out_of_bounds_is_obstacle:
+            if (pg1[0] < 0 or pg1[0] >= rows or pg1[1] < 0 or pg1[1] >= cols or
+                    pg2[0] < 0 or pg2[0] >= rows or pg2[1] < 0 or pg2[1] >= cols):
+                return False
 
         # Get all points in the line using Bresenham's algorithm, so implement it here
 
         line_points = bresenham(pg1[0], pg1[1], pg2[0], pg2[1])
         for r, c in line_points:
-            if self.__grid[r, c] > self.__threshold:
-                return False
+
+            # check the bounds
+            if (0 <= r < rows) and (0 <= c < cols):
+                # only then we can check the grid value
+                if self.__grid[r, c] > self.__threshold:
+                    return False
 
         return True
 
