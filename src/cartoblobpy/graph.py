@@ -489,9 +489,14 @@ class Graph:
                     )
 
     def compute_distances(self):
-        # Compute distance transform (distance to nearest obstacle)
         self.__obstacle_mask = (self.__grid > self.__threshold).astype(np.uint8)
-        self.__distance_map = scipy.ndimage.distance_transform_edt(1 - self.__obstacle_mask)
+
+        # Standard distance transform
+        edt_dist = scipy.ndimage.distance_transform_edt(1 - self.__obstacle_mask)
+
+        # Algebraically choose between edt_dist and np.inf based on obstacle presence
+        # np.any() returns a single boolean; np.where handles it cleanly at the C-level
+        self.__distance_map = np.where(np.any(self.__obstacle_mask), edt_dist, np.inf)
 
     @property
     def nodes(self):
