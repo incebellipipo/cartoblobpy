@@ -4,7 +4,7 @@ Graph representation module for path planning applications.
 This module provides functionality for loading, manipulating and representing
 graphs from images for use in path planning algorithms.
 """
-
+import operator
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -488,8 +488,11 @@ class Graph:
                             np.sqrt(dr**2 + dc**2) * (1 + self.__grid[nr, nc]))
                     )
 
-    def compute_distances(self):
-        self.__obstacle_mask = (self.__grid > self.__threshold).astype(np.uint8)
+    def compute_distances(self, layer_name=None, threshold=None, op=operator.gt):
+        if not layer_name:
+            self.__obstacle_mask = (op(self.__grid, self.__threshold)).astype(np.uint8)
+        else:
+            self.__obstacle_mask = (op(np.array(self.__layer_maps[layer_name]), threshold)).astype(np.uint8)
 
         # Standard distance transform
         edt_dist = scipy.ndimage.distance_transform_edt(1 - self.__obstacle_mask)
@@ -672,6 +675,31 @@ class Graph:
             raise ValueError("coordinate_frame must be 'ENU' or 'NED'")
         self.__frame = frame
 
+    def free_space_mask(self, layer_name=None, threshold=None, op=operator.le):
+        """
+        Get a binary mask of free space based on a specified layer and threshold.
+
+        :param layer_name: Name of the layer to use for free space determination.
+        :type layer_name: str
+        :param threshold: Threshold value to determine free vs. occupied space in the layer. If None, uses 0.5.
+        :type threshold: float or None
+        :returns: Binary mask where 1 indicates free space and 0 indicates occupied space.
+        :rtype: numpy.ndarray
+        :raises ValueError: If the specified layer does not exist or is not a valid array.
+        """
+
+        if layer_name is None:
+            if self.__grid is None:
+                raise ValueError("Grid is not initialized.")
+            layer_map = self.__grid
+            threshold = self.__threshold
+        else:
+            layer_map = self.__layer_maps[layer_name]
+
+            threshold = self.__threshold if threshold is None else threshold
+
+        return op(layer_map, threshold).astype(np.uint8)
+
     def world_to_grid(self, world_coords):
         """
         Transform world coordinates to grid coordinates.
@@ -680,7 +708,7 @@ class Graph:
         In NED frame: ``world_coords = [x_north, y_east]``.
 
         Internally, the map plane is treated as ``[x_east, y_north]``, and grid indices are:
-        ``row ≈ y_north / resolution`` and ``col ≈ x_east / resolution``.
+        ``row ~= y_north / resolution`` and ``col ~= x_east / resolution``.
 
         :param world_coords: World coordinates ``[x, y]`` in the selected ``coordinate_frame``.
         :type world_coords: array_like
@@ -764,7 +792,7 @@ class Graph:
 
         return np.array([world_x, world_y])
 
-    def is_free_path(self, point1, point2, out_of_bounds_is_obstacle=False):
+    def is_free_path(self, point1, point2, out_of_bounds_is_obstacle=False, layer_name=None, threshold=None, op=operator.lt):
         """
         Check if the straight line path between two world points is obstacle-free.
 
@@ -772,6 +800,12 @@ class Graph:
         :type point1: array_like
         :param point2: World coordinates of the second point ``[x, y]``.
         :type point2: array_like
+        :param out_of_bounds_is_obstacle: If ``True``, treat points outside the grid as obstacles.
+        :type out_of_bounds_is_obstacle: bool
+        :param layer_name: Optional layer name to check for obstacles instead of the base occupancy grid
+        :type layer_name: str | None
+        :param threshold: Threshold to determine obstacles in the specified layer (ignored if layer_name is None)
+        :type threshold: float or None
         :returns: ``True`` if the path is free of obstacles, ``False`` otherwise.
         :rtype: bool
         """
@@ -792,10 +826,17 @@ class Graph:
         line_points = bresenham(pg1[0], pg1[1], pg2[0], pg2[1])
         for r, c in line_points:
 
+            if layer_name is not None:
+                layer_map = self.__layer_maps[layer_name]
+                threshold = threshold if threshold is not None else self.__threshold
+            else:
+                layer_map = self.__grid
+                threshold = self.__threshold
+
             # check the bounds
             if (0 <= r < rows) and (0 <= c < cols):
                 # only then we can check the grid value
-                if self.__grid[r, c] > self.__threshold:
+                if op(layer_map[r, c], threshold):
                     return False
 
         return True
