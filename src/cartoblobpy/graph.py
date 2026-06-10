@@ -792,7 +792,7 @@ class Graph:
 
         return np.array([world_x, world_y])
 
-    def is_free_path(self, point1, point2, out_of_bounds_is_obstacle=False, layer_name=None, threshold=None, op=operator.lt):
+    def is_free_path(self, point1, point2, out_of_bounds_is_obstacle=False, layer_name=None, threshold=None, op=operator.gt):
         """
         Check if the straight line path between two world points is obstacle-free.
 
